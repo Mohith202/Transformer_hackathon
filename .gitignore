@@ -205,3 +205,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+
+# adding Dataset, model and pdfs also
+Dataset on Resource Allocation and Usage for a Private Cloud
+*.pdf
+*.zip

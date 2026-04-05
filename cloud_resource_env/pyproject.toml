@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openenv-cloud-resource-env"
+version = "0.1.0"
+description = "Cloud GPU/CPU Resource Management Environment for OpenEnv – RL-based autoscaling with real-world data patterns"
+requires-python = ">=3.10"
+dependencies = [
+    "openenv-core[core] @ git+https://github.com/meta-pytorch/OpenEnv.git@v0.2.3",
+    "fastapi>=0.115.0",
+    "pydantic>=2.0.0",
+    "uvicorn>=0.24.0",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[project.scripts]
+server = "cloud_resource_env.server.app:main"
+
+[tool.setuptools]
+include-package-data = true
+packages = ["cloud_resource_env", "cloud_resource_env.server"]
+package-dir = { "cloud_resource_env" = ".", "cloud_resource_env.server" = "server" }

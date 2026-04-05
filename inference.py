@@ -25,6 +25,7 @@ from cloud_resource_env import CloudResourceClient
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
+# print(os.getenv("HF_TOKEN"))
 IMAGE_NAME = os.getenv("IMAGE_NAME")
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
@@ -33,9 +34,9 @@ BENCHMARK = "cloud_resource_env"
 ENV_URL = os.getenv("ENV_URL", "http://localhost:8000")
 
 TASKS = [
-    {"name": "single_server_scaling", "max_steps": 5},
-    {"name": "multi_server_balancing", "max_steps": 8},
-    {"name": "cost_optimized_planning", "max_steps": 12},
+    {"name": "single_server_scaling", "max_steps": 1},
+    {"name": "multi_server_balancing", "max_steps": 2},
+    {"name": "cost_optimized_planning", "max_steps": 3},
 ]
 
 TEMPERATURE = 0.4

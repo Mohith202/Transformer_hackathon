@@ -34,9 +34,9 @@ BENCHMARK = "cloud_resource_env"
 ENV_URL = os.getenv("ENV_URL", "http://localhost:8000")
 
 TASKS = [
-    {"name": "gpu_cpu_allocation", "max_steps": 8},
-    {"name": "thermal_management", "max_steps": 10},
-    {"name": "heuristic_fragmentation", "max_steps": 12},
+    {"name": "gpu_cpu_allocation", "max_steps": 2 },
+    {"name": "thermal_management", "max_steps": 2 },
+    {"name": "heuristic_fragmentation", "max_steps": 2},
 ]
 
 TEMPERATURE = 0.4

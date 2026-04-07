@@ -1,6 +1,6 @@
 """
-Inference Script – Cloud Resource Management OpenEnv Environment
-================================================================
+Inference Script – Cloud GPU+CPU Resource Management OpenEnv Environment
+========================================================================
 Mandatory variables (set in environment configuration):
     API_BASE_URL   The API endpoint for the LLM.
     MODEL_NAME     The model identifier to use for inference.
@@ -25,7 +25,6 @@ from cloud_resource_env import CloudResourceClient
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-# print(os.getenv("HF_TOKEN"))
 IMAGE_NAME = os.getenv("IMAGE_NAME")
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
@@ -34,32 +33,85 @@ BENCHMARK = "cloud_resource_env"
 ENV_URL = os.getenv("ENV_URL", "http://localhost:8000")
 
 TASKS = [
-    {"name": "single_server_scaling", "max_steps": 1},
-    {"name": "multi_server_balancing", "max_steps": 2},
-    {"name": "cost_optimized_planning", "max_steps": 3},
+    {"name": "gpu_cpu_allocation", "max_steps": 8},
+    {"name": "thermal_management", "max_steps": 10},
+    {"name": "heuristic_fragmentation", "max_steps": 12},
 ]
 
 TEMPERATURE = 0.4
-MAX_TOKENS = 300
+MAX_TOKENS = 500
 SUCCESS_THRESHOLD = 0.3
 
-SYSTEM_PROMPT = textwrap.dedent("""\
-You are an expert cloud infrastructure manager. You observe server metrics and
-decide scaling actions to keep CPU utilization near 70% of capacity.
+# ---------------------------------------------------------------------------
+# Task-specific system prompts
+# ---------------------------------------------------------------------------
+SYSTEM_PROMPTS = {
+    "gpu_cpu_allocation": textwrap.dedent("""\
+        You are an expert cloud GPU+CPU infrastructure manager. You observe
+        cluster node metrics (GPU utilisation, CPU utilisation, VRAM, memory,
+        cost) and decide allocation actions to optimise throughput and cost.
 
-Rules:
-- For each server, choose one action: "scale_up", "scale_down", or "maintain".
-- scale_up:   increases capacity by 50% (costs more)
-- scale_down: decreases capacity by 33% (saves money)
-- maintain:   no change
-- Avoid overloads: utilization must stay below 100%.
-- Target utilization: ~70% CPU.
+        Rules:
+        - For each node, choose one action:
+            "allocate_high" — increase GPU+CPU capacity by 50% (costs more)
+            "allocate_low"  — decrease capacity by 33% (saves money)
+            "maintain"      — no change
+            "migrate"       — move 30% of this node's load to other nodes
+        - Target GPU utilisation: ~70%.
+        - Target CPU utilisation: ~70%.
+        - Avoid overloads (utilisation > 100%).
+        - Stay within budget if one is specified.
 
-Respond with ONLY a valid JSON object mapping server_id to action. Example:
-{"server_0": "maintain", "server_1": "scale_up"}
+        Respond with ONLY a valid JSON object mapping node_id to action. Example:
+        {"node_0": "maintain", "node_1": "allocate_high", "node_2": "migrate"}
 
-No explanation, no markdown, just pure JSON.
-""")
+        No explanation, no markdown, just pure JSON.
+    """),
+
+    "thermal_management": textwrap.dedent("""\
+        You are an expert cloud thermal management engineer. You monitor GPU
+        temperatures and ambient temperature, and decide cooling and load
+        redistribution actions to prevent thermal throttling.
+
+        Rules:
+        - For each node, choose one action:
+            "increase_cooling" — increase cooling level (costs energy)
+            "decrease_cooling" — decrease cooling level (saves energy)
+            "migrate_load"     — move 40% of load to the coolest node
+            "maintain"         — no change
+        - Safe temperature zone: 55°C – 75°C.
+        - CRITICAL: If GPU temperature exceeds max threshold → thermal throttle!
+        - Balance: keep temps safe WITHOUT excessive cooling cost.
+        - When ambient temperature is high, proactively increase cooling.
+
+        Respond with ONLY a valid JSON object mapping node_id to action. Example:
+        {"node_0": "increase_cooling", "node_1": "maintain", "node_2": "migrate_load", "node_3": "maintain"}
+
+        No explanation, no markdown, just pure JSON.
+    """),
+
+    "heuristic_fragmentation": textwrap.dedent("""\
+        You are an expert GPU cluster scheduler. You manage a fragmented GPU
+        cluster where nodes have 8 GPU slots each and workloads need contiguous
+        blocks. Choose allocation and defragmentation strategies.
+
+        Rules:
+        - For each node, choose one strategy:
+            "best_fit"       — place workload in node with smallest sufficient free block
+            "first_fit"      — place workload in first node with free space
+            "compact"        — defragment first (move allocated to front), then best-fit
+            "split_workload" — if no contiguous block, split across nodes
+        - All nodes use the majority-vote strategy for this step.
+        - The pending workloads have varying GPU requirements (1, 2, 4, or 8 slots).
+        - Goal: place all pending workloads, minimise fragmentation.
+        - Compaction has a 10% overhead penalty.
+
+        Respond with ONLY a valid JSON object mapping node_id to strategy. Example:
+        {"node_0": "best_fit", "node_1": "best_fit", "node_2": "compact", "node_3": "first_fit", "node_4": "best_fit"}
+
+        No explanation, no markdown, just pure JSON.
+    """),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -98,21 +150,45 @@ def build_user_prompt(
 ) -> str:
     state_json = json.dumps(cluster_state, indent=2)
     hist_block = "\n".join(history[-4:]) if history else "None"
+
+    # Build task-specific context
+    extra_context = ""
+    task_name = task_info.get("task_name", "")
+
+    if task_name == "thermal_management":
+        nodes = cluster_state.get("nodes", [])
+        hot_nodes = [n for n in nodes if n.get("gpu_temp_celsius", 0) > 75]
+        if hot_nodes:
+            hot_list = ", ".join(
+                f"{n['node_id']}={n['gpu_temp_celsius']:.1f}°C" for n in hot_nodes
+            )
+            extra_context += f"\n⚠️ HOT NODES: {hot_list}\n"
+        ambient = cluster_state.get("ambient_temp_celsius", 25)
+        extra_context += f"Ambient temperature: {ambient:.1f}°C\n"
+
+    elif task_name == "heuristic_fragmentation":
+        pending = cluster_state.get("pending_workloads", [])
+        frag = cluster_state.get("cluster_fragmentation", 0)
+        extra_context += f"\nPending workloads (GPU slots needed): {pending}\n"
+        extra_context += f"Cluster fragmentation: {frag:.3f}\n"
+
     return textwrap.dedent(f"""\
 Task: {task_info.get('task_name', 'unknown')} ({task_info.get('difficulty', '?')})
 Objective: {task_info.get('description', '')}
-Target CPU utilization: {task_info.get('target_cpu_utilization_pct', 70)}%
+Valid actions: {task_info.get('valid_actions', [])}
+Target GPU utilisation: {task_info.get('target_gpu_utilization_pct', 70)}%
+Target CPU utilisation: {task_info.get('target_cpu_utilization_pct', 70)}%
 Budget per step: {task_info.get('budget_per_step', 'N/A')}
 
 Step {step_num} of {task_info.get('max_steps', '?')}
-
+{extra_context}
 Current cluster state:
 {state_json}
 
 Recent history:
 {hist_block}
 
-Decide scaling actions for each server. Respond with JSON only.
+Decide actions for each node. Respond with JSON only.
 """)
 
 
@@ -122,14 +198,17 @@ def get_llm_decision(
     task_info: Dict[str, Any],
     step_num: int,
     history: List[str],
-    server_ids: List[str],
+    node_ids: List[str],
 ) -> str:
+    task_name = task_info.get("task_name", "gpu_cpu_allocation")
+    system_prompt = SYSTEM_PROMPTS.get(task_name, SYSTEM_PROMPTS["gpu_cpu_allocation"])
     user_prompt = build_user_prompt(cluster_state, task_info, step_num, history)
+
     try:
         completion = client.chat.completions.create(
             model=MODEL_NAME,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=TEMPERATURE,
@@ -142,15 +221,18 @@ def get_llm_decision(
             text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
         # Validate JSON
         parsed = json.loads(text)
-        # Ensure all server_ids are present
-        for sid in server_ids:
-            if sid not in parsed:
-                parsed[sid] = "maintain"
+        # Ensure all node_ids are present
+        valid_actions = task_info.get("valid_actions", ["maintain"])
+        default_action = valid_actions[0] if valid_actions else "maintain"
+        for nid in node_ids:
+            if nid not in parsed:
+                parsed[nid] = default_action
         return json.dumps(parsed)
     except Exception as exc:
         print(f"[DEBUG] LLM error: {exc}", flush=True)
-        # Fallback: maintain all servers
-        fallback = {sid: "maintain" for sid in server_ids}
+        valid_actions = task_info.get("valid_actions", ["maintain"])
+        default_action = valid_actions[0] if valid_actions else "maintain"
+        fallback = {nid: default_action for nid in node_ids}
         return json.dumps(fallback)
 
 
@@ -185,13 +267,13 @@ async def run_task(
         if isinstance(task_info, str):
             task_info = json.loads(task_info)
 
-        server_ids = [s["server_id"] for s in cluster_state.get("servers", [])]
+        node_ids = [n["node_id"] for n in cluster_state.get("nodes", [])]
         history: List[str] = []
 
         for step in range(1, max_steps + 1):
             # Get LLM decision
             decisions = get_llm_decision(
-                llm_client, cluster_state, task_info, step, history, server_ids
+                llm_client, cluster_state, task_info, step, history, node_ids
             )
 
             # Take action
